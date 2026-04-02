@@ -302,10 +302,6 @@ jobs:
           # Verify network connectivity
           sudo incus exec ci-test -- sh -c \
             'ping -c1 -W3 1.1.1.1 >/dev/null 2>&1 && echo "network OK" || echo "network WARN: no ping"'
-          # Pre-install bash while network is confirmed up.
-          # incusbox-export uses 'local' variables which require bash;
-          # Alpine's busybox sh does not support them.
-          sudo incus exec ci-test -- apk add --no-cache bash
 
       - name: Run incusbox-init synchronously
         run: |
