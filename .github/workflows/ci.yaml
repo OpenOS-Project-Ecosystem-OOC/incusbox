@@ -219,11 +219,20 @@ jobs:
             echo "Created profile: ${name}"
           done
 
+      - name: Add Incus images remote
+        run: |
+          # Ensure the images: remote is registered (may not be present by default)
+          sudo incus remote list --format csv | grep -q "^images," || \
+            sudo incus remote add images https://images.linuxcontainers.org --accept-certificate
+          # Verify the remote is reachable and the alpine alias exists
+          sudo incus image list images:alpine/3.19 --format csv | head -3 || true
+
       - name: Create container (Incus native image — no OCI/skopeo needed)
         run: |
-          # Use Alpine from the Incus image server — smallest image, fast pull
+          # Use Ubuntu minimal from the ubuntu: remote — always pre-configured
+          # and reliably available on Incus installations.
           sudo incusbox create \
-            --image images:alpine/3.19 \
+            --image ubuntu:24.04 \
             --name ci-test \
             --root \
             --yes \
@@ -303,3 +312,5 @@ jobs:
           sudo incus info --show-log ci-test 2>/dev/null || true
           echo "=== incusbox-init log ==="
           sudo incus exec ci-test -- cat /var/log/incusbox-init.log 2>/dev/null || true
+          echo "=== cloud-init status ==="
+          sudo incus exec ci-test -- cloud-init status --long 2>/dev/null || true
