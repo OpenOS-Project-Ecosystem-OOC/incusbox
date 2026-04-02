@@ -135,18 +135,27 @@ setup_user() {
                 "${INCUSBOX_HOST_USER}" 2>/dev/null || true
         fi
     else
-        # BusyBox path (Alpine)
+        # BusyBox path (Alpine and similar minimal distros)
+        # addgroup: -g GID NAME  (no --gid long form in BusyBox)
+        # adduser:  -u UID -G GROUP -h HOME -s SHELL -D (no-password) NAME
+        # The group must exist before adduser -G references it.
         if ! getent group "${INCUSBOX_HOST_GID}" >/dev/null 2>&1; then
-            addgroup -g "${INCUSBOX_HOST_GID}" "${INCUSBOX_HOST_USER}" 2>/dev/null || true
+            addgroup -g "${INCUSBOX_HOST_GID}" "${INCUSBOX_HOST_USER}" 2>/dev/null \
+                || log "Warning: addgroup failed for gid=${INCUSBOX_HOST_GID}"
         fi
         if ! getent passwd "${INCUSBOX_HOST_USER}" >/dev/null 2>&1; then
+            # Resolve the group name from GID for -G flag
+            local grp_name
+            grp_name="$(getent group "${INCUSBOX_HOST_GID}" 2>/dev/null | cut -d: -f1 \
+                || printf '%s' "${INCUSBOX_HOST_USER}")"
             adduser \
                 -u "${INCUSBOX_HOST_UID}" \
-                -G "${INCUSBOX_HOST_USER}" \
+                -G "${grp_name}" \
                 -h "${INCUSBOX_CONTAINER_HOME}" \
                 -s /bin/sh \
                 -D \
-                "${INCUSBOX_HOST_USER}" 2>/dev/null || true
+                "${INCUSBOX_HOST_USER}" 2>/dev/null \
+                || log "Warning: adduser failed for ${INCUSBOX_HOST_USER}"
         fi
     fi
 
@@ -163,8 +172,13 @@ setup_user() {
 
     # Also add to wheel/sudo groups if they exist
     for grp in sudo wheel adm; do
-        getent group "${grp}" >/dev/null 2>&1 && \
+        getent group "${grp}" >/dev/null 2>&1 || continue
+        if command -v usermod >/dev/null 2>&1; then
             usermod -aG "${grp}" "${INCUSBOX_HOST_USER}" 2>/dev/null || true
+        else
+            # BusyBox: adduser USER GROUP
+            adduser "${INCUSBOX_HOST_USER}" "${grp}" 2>/dev/null || true
+        fi
     done
 }
 
