@@ -121,6 +121,18 @@ jobs:
           bash incusbox/install --user --update --verbose
           echo "OK: --update completed without error"
 
+      - name: incusbox-setup-rootless (check mode)
+        run: |
+          # Run without --fix: check-only mode. The script always exits 0
+          # (issues are reported but don't cause a non-zero exit). We verify
+          # it runs to completion and produces a summary line.
+          out="$("${HOME}/.local/bin/incusbox-setup-rootless" 2>&1)"
+          echo "${out}"
+          # Must print either "All checks passed" or "N issue(s) found"
+          printf '%s' "${out}" | grep -qE "checks passed|issue\(s\) found" \
+            || { echo "FAIL: unexpected output from incusbox-setup-rootless"; exit 1; }
+          echo "OK: incusbox-setup-rootless ran to completion"
+
   profile-yaml:
     name: Validate profile YAML
     runs-on: ubuntu-24.04
@@ -425,6 +437,38 @@ jobs:
             || { echo "FAIL: wrapper does not reference /bin/ls"; exit 1; }
           echo "OK: incusbox-export created wrapper"
           sudo rm -f /tmp/ls-wrapper
+
+      - name: incusbox-create (dry-run + duplicate detection)
+        run: |
+          # --dry-run: verify argument parsing and incus launch command generation
+          # without actually creating a container. Output goes to stderr so
+          # capture with 2>&1.
+          out="$(sudo incusbox create --root --dry-run \
+            --image ci-alpine --name dry-run-box 2>&1)"
+          echo "dry-run output: ${out}"
+          printf '%s' "${out}" | grep -q "\[dry-run\]" \
+            || { echo "FAIL: dry-run output missing '[dry-run]' marker"; exit 1; }
+          printf '%s' "${out}" | grep -q "incus launch" \
+            || { echo "FAIL: dry-run output missing 'incus launch'"; exit 1; }
+          printf '%s' "${out}" | grep -q "dry-run-box" \
+            || { echo "FAIL: dry-run output missing container name"; exit 1; }
+          echo "OK: incusbox-create --dry-run works"
+          # Duplicate detection: ci-test already exists; create should exit 0
+          # with an "already exists" message rather than trying to re-create it.
+          dup_out="$(sudo incusbox create --root --yes \
+            --image ci-alpine --name ci-test 2>&1 || true)"
+          echo "duplicate output: ${dup_out}"
+          printf '%s' "${dup_out}" | grep -qi "already exists" \
+            || { echo "FAIL: expected 'already exists' message"; exit 1; }
+          echo "OK: incusbox-create duplicate detection works"
+
+      - name: incusbox-upgrade
+        run: |
+          # Run upgrade against the running ci-test container.
+          # On Alpine this runs 'apk upgrade'; we just verify the command
+          # completes without error (network may be flaky so allow apk warnings).
+          sudo incusbox upgrade --root ci-test
+          echo "OK: incusbox-upgrade completed"
 
       - name: incusbox stop
         run: |
