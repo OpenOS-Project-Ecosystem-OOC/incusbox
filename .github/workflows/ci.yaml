@@ -117,6 +117,9 @@ jobs:
               exit 1
             fi
           done
+          # Verify --update re-runs cleanly over an existing installation
+          bash incusbox/install --user --update --verbose
+          echo "OK: --update completed without error"
 
   profile-yaml:
     name: Validate profile YAML
@@ -361,6 +364,40 @@ jobs:
         run: |
           sudo incusbox list --root
           echo "OK: list completed"
+
+      - name: incusbox-host-exec
+        run: |
+          # incusbox-host-exec is bind-mounted at /run/host/usr/local/bin/incusbox-host-exec
+          # inside the container. Verify it exists and can run a host command.
+          sudo incus exec ci-test -- test -f /run/host/usr/local/bin/incusbox-host-exec \
+            || { echo "FAIL: incusbox-host-exec not found at /run/host"; exit 1; }
+          # Run a host command (uname) from inside the container via host-exec
+          result="$(sudo incus exec ci-test -- \
+            /run/host/usr/local/bin/incusbox-host-exec uname -s 2>/dev/null || true)"
+          echo "host uname: ${result}"
+          [ "${result}" = "Linux" ] || { echo "FAIL: expected Linux from host uname"; exit 1; }
+          echo "OK: incusbox-host-exec works"
+
+      - name: incusbox-export (binary)
+        run: |
+          # incusbox-export runs INSIDE the container and writes a wrapper to the
+          # bind-mounted home directory (~/.local/bin on the host).
+          # Ensure ~/.local/bin exists on the host so the bind-mount is writable.
+          mkdir -p "${HOME}/.local/bin"
+          # Run incusbox-export from inside the container.
+          # The script is on the host at /usr/local/bin; inside the container
+          # it is accessible via the /run/host bind-mount.
+          sudo incus exec ci-test -- \
+            /run/host/usr/local/bin/incusbox-export --bin /usr/bin/git
+          wrapper="${HOME}/.local/bin/git"
+          [ -f "${wrapper}" ] || { echo "FAIL: exported wrapper not found at ${wrapper}"; exit 1; }
+          echo "Wrapper contents:"
+          cat "${wrapper}"
+          grep -q "incusbox enter" "${wrapper}" \
+            || { echo "FAIL: wrapper does not call incusbox enter"; exit 1; }
+          echo "OK: incusbox-export created wrapper"
+          # Clean up
+          rm -f "${wrapper}"
 
       - name: incusbox stop
         run: |
