@@ -382,6 +382,8 @@ jobs:
           # bind-mounted home directory (~/.local/bin on the host).
           # Ensure ~/.local/bin exists on the host so the bind-mount is writable.
           mkdir -p "${HOME}/.local/bin"
+          # incusbox-export uses bash (local variables); install it in Alpine.
+          sudo incus exec ci-test -- apk add --no-cache bash
           # Push the script into the container (same reason as host-exec above:
           # /run/host/usr/local is not visible via the non-recursive source=/ mount).
           sudo incus file push incusbox/incusbox-export \
