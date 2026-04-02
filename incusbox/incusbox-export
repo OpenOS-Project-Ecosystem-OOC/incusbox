@@ -94,7 +94,6 @@ die()  { printf >&2 'Error: %s\n' "$*"; exit 1; }
 # ── binary export ─────────────────────────────────────────────────────────────
 export_binary() {
     bin_path="$1"
-    bin_name
     bin_name="$(basename "${bin_path}")"
     label="${export_label:-${CONTAINER_ID}}"
     wrapper="${host_bin_dir}/${bin_name}"
