@@ -286,9 +286,6 @@ jobs:
           # Add home bind-mount
           sudo incus config device add ci-test home disk \
             source="${HOME}" path="${HOME}"
-          # Add /run/host for host-exec test
-          sudo incus config device add ci-test run-host disk \
-            source=/ path=/run/host readonly=true
           echo "Container created"
 
       - name: Verify container is running
@@ -354,12 +351,6 @@ jobs:
           echo "Home ${home}: ${result}"
           [ "${result}" = "exists" ] || { echo "FAIL: home not mounted"; exit 1; }
 
-      - name: Verify /run/host is mounted (host-exec path)
-        run: |
-          result="$(sudo incus exec ci-test -- test -d /run/host 2>/dev/null && echo "exists" || echo "missing")"
-          echo "/run/host: ${result}"
-          [ "${result}" = "exists" ] || { echo "FAIL: /run/host not mounted"; exit 1; }
-
       - name: incusbox list
         run: |
           sudo incusbox list --root
@@ -367,15 +358,22 @@ jobs:
 
       - name: incusbox-host-exec
         run: |
-          # incusbox-host-exec is bind-mounted at /run/host/usr/local/bin/incusbox-host-exec
-          # inside the container. Verify it exists and can run a host command.
-          sudo incus exec ci-test -- test -f /run/host/usr/local/bin/incusbox-host-exec \
-            || { echo "FAIL: incusbox-host-exec not found at /run/host"; exit 1; }
-          # Run a host command (uname) from inside the container via host-exec
+          # Push the script into the container so we don't rely on /run/host
+          # (GHA runners mount /usr/local separately; a source=/ bind-mount is
+          # non-recursive and won't include it).
+          sudo incus file push incusbox/incusbox-host-exec \
+            ci-test/usr/local/bin/incusbox-host-exec --mode 0755
+          # chroot /run/host is the expected fallback path inside an Incus
+          # container (no CAP_SYS_PTRACE → nsenter is skipped).
+          # /run/host must be present for the script to work.
+          sudo incus config device add ci-test run-host disk \
+            source=/ path=/run/host readonly=true
+          # uname -s via chroot /run/host should return "Linux"
           result="$(sudo incus exec ci-test -- \
-            /run/host/usr/local/bin/incusbox-host-exec uname -s 2>/dev/null || true)"
-          echo "host uname: ${result}"
-          [ "${result}" = "Linux" ] || { echo "FAIL: expected Linux from host uname"; exit 1; }
+            /usr/local/bin/incusbox-host-exec uname -s 2>&1)"
+          echo "host-exec output: ${result}"
+          printf '%s' "${result}" | grep -q "Linux" \
+            || { echo "FAIL: expected Linux, got: ${result}"; exit 1; }
           echo "OK: incusbox-host-exec works"
 
       - name: incusbox-export (binary)
@@ -384,11 +382,12 @@ jobs:
           # bind-mounted home directory (~/.local/bin on the host).
           # Ensure ~/.local/bin exists on the host so the bind-mount is writable.
           mkdir -p "${HOME}/.local/bin"
-          # Run incusbox-export from inside the container.
-          # The script is on the host at /usr/local/bin; inside the container
-          # it is accessible via the /run/host bind-mount.
+          # Push the script into the container (same reason as host-exec above:
+          # /run/host/usr/local is not visible via the non-recursive source=/ mount).
+          sudo incus file push incusbox/incusbox-export \
+            ci-test/usr/local/bin/incusbox-export --mode 0755
           sudo incus exec ci-test -- \
-            /run/host/usr/local/bin/incusbox-export --bin /usr/bin/git
+            /usr/local/bin/incusbox-export --bin /usr/bin/git
           wrapper="${HOME}/.local/bin/git"
           [ -f "${wrapper}" ] || { echo "FAIL: exported wrapper not found at ${wrapper}"; exit 1; }
           echo "Wrapper contents:"
