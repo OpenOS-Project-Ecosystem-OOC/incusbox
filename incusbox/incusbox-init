@@ -143,7 +143,7 @@ setup_user() {
         # GID conflicts: the host GID (e.g. 127 for "docker") may already be
         # taken inside the container by a different group. In that case we
         # skip creating a new group and reuse whatever group owns that GID.
-        local grp_name
+        grp_name=""
         if ! getent group "${INCUSBOX_HOST_GID}" >/dev/null 2>&1; then
             if addgroup -g "${INCUSBOX_HOST_GID}" "${INCUSBOX_HOST_USER}" 2>/dev/null; then
                 grp_name="${INCUSBOX_HOST_USER}"
@@ -174,7 +174,7 @@ setup_user() {
         "${INCUSBOX_CONTAINER_HOME}" 2>/dev/null || true
 
     # NOPASSWD sudo — create sudoers.d if it doesn't exist (Alpine omits it)
-    local sudoers_file="/etc/sudoers.d/incusbox-${INCUSBOX_HOST_USER}"
+    sudoers_file="/etc/sudoers.d/incusbox-${INCUSBOX_HOST_USER}"
     mkdir -p /etc/sudoers.d
     printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${INCUSBOX_HOST_USER}" > "${sudoers_file}" \
         2>/dev/null || log "Warning: could not write sudoers file (continuing)"
@@ -201,7 +201,6 @@ sync_host_passwd() {
 
     # Append any host users not already in the container's passwd
     while IFS= read -r line; do
-        local uname
         uname="$(printf '%s' "${line}" | cut -d: -f1)"
         grep -q "^${uname}:" /etc/passwd 2>/dev/null || \
             printf '%s\n' "${line}" >> /etc/passwd
@@ -209,7 +208,6 @@ sync_host_passwd() {
 
     [ -f /run/host/etc/group ] || return 0
     while IFS= read -r line; do
-        local gname
         gname="$(printf '%s' "${line}" | cut -d: -f1)"
         grep -q "^${gname}:" /etc/group 2>/dev/null || \
             printf '%s\n' "${line}" >> /etc/group
@@ -232,7 +230,6 @@ setup_nvidia() {
         [ -d "${lib_dir}" ] || continue
         find "${lib_dir}" -name 'libcuda*' -o -name 'libnvidia*' 2>/dev/null | \
         while read -r lib; do
-            local dest
             dest="/usr/lib/$(basename "$(dirname "${lib}")")/$(basename "${lib}")"
             [ -e "${dest}" ] || ln -sf "${lib}" "${dest}" 2>/dev/null || true
         done
@@ -264,12 +261,8 @@ setup_init_system() {
 # Write a minimal .bashrc / .profile addition so the container feels like
 # a normal login shell with the right environment.
 setup_shell_integration() {
-    local profile_file="${INCUSBOX_CONTAINER_HOME}/.profile"
-    local rc_file="${INCUSBOX_CONTAINER_HOME}/.bashrc"
-
     # Write shell integration as the target user so bind-mounted home dirs
     # (owned by the host user) are writable. Fall back silently if su fails.
-    local write_cmd
     write_cmd="$(cat <<'WRITEBLOCK'
 profile_file="${INCUSBOX_CONTAINER_HOME}/.profile"
 rc_file="${INCUSBOX_CONTAINER_HOME}/.bashrc"
@@ -304,7 +297,6 @@ WRITEBLOCK
 setup_xdg_dirs() {
     # Run as the target user so bind-mounted home dirs (owned by host uid)
     # are writable. Fall back silently if su fails.
-    local xdg_cmd
     xdg_cmd="mkdir -p \
         '${INCUSBOX_CONTAINER_HOME}/.local/share' \
         '${INCUSBOX_CONTAINER_HOME}/.config' \
