@@ -64,7 +64,7 @@ done
 # ── helpers ──────────────────────────────────────────────────────────────────
 log()  { printf >&2 '%s\n' "$*"; }
 die()  { printf >&2 'Error: %s\n' "$*"; exit 1; }
-info() { [ "${verbose}" -eq 1 ] && printf >&2 '+ %s\n' "$*"; }
+info() { [ "${verbose}" -eq 1 ] && printf >&2 '+ %s\n' "$*" || true; }
 
 show_help() {
     cat <<EOF
