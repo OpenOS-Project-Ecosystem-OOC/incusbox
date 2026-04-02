@@ -534,11 +534,12 @@ lxc.namespace.share.ipc = 1"
     fi
 
     # Host network namespace — container uses host's network stack directly.
-    # Skipped when --unshare-netns is set (container gets its own NIC instead).
-    if [ "${unshare_netns}" -eq 0 ]; then
-        raw_lxc="${raw_lxc}
-lxc.net.0.type = none"
-    fi
+    # When sharing the host network namespace, no NIC device is added to the
+    # container (handled in configure_devices by omitting any NIC device).
+    # lxc.net.0.type = none is only valid when a NIC at index 0 exists to
+    # override; setting it on a container with no NICs causes an error.
+    # The incusbox-unshare-net profile adds a bridged NIC when --unshare-netns
+    # is set, so no raw.lxc directive is needed here in either case.
 
     # Apply all raw.lxc directives in a single config set call.
     ${INCUS} config set "${name}" raw.lxc="${raw_lxc}"
