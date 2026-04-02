@@ -285,7 +285,7 @@ jobs:
             nictype=bridged parent=incusbr0 name=eth0
           # Add home bind-mount
           sudo incus config device add ci-test home disk \
-            source="${HOME}" path="${HOME}" shift=true
+            source="${HOME}" path="${HOME}"
           echo "Container created"
 
       - name: Verify container is running
@@ -386,9 +386,10 @@ jobs:
           # /run/host/usr/local is not visible via the non-recursive source=/ mount).
           sudo incus file push incusbox/incusbox-export \
             ci-test/usr/local/bin/incusbox-export --mode 0755
-          # Run as the container user so HOME resolves to the bind-mounted
-          # home directory (not /root). Use /bin/sh — always present in Alpine.
-          sudo incus exec --user "$(id -ru)" --env "HOME=${HOME}" ci-test -- \
+          # Run as root but override HOME so the wrapper lands in the
+          # bind-mounted home directory. Root can write there regardless of
+          # uid mapping (GHA runners don't support idmapped mounts).
+          sudo incus exec --env "HOME=${HOME}" ci-test -- \
             /usr/local/bin/incusbox-export --bin /bin/sh
           wrapper="${HOME}/.local/bin/sh"
           [ -f "${wrapper}" ] || { echo "FAIL: exported wrapper not found at ${wrapper}"; exit 1; }
