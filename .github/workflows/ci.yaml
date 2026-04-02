@@ -219,20 +219,24 @@ jobs:
             echo "Created profile: ${name}"
           done
 
-      - name: Add Incus images remote
+      - name: Add Incus remotes and pull test image
         run: |
-          # Ensure the images: remote is registered (may not be present by default)
+          # Show what remotes exist on this fresh install
+          sudo incus remote list
+          # Add the images remote (not present by default on apt-installed Incus)
           sudo incus remote list --format csv | grep -q "^images," || \
-            sudo incus remote add images https://images.linuxcontainers.org --accept-certificate
-          # Verify the remote is reachable and the alpine alias exists
-          sudo incus image list images:alpine/3.19 --format csv | head -3 || true
+            sudo incus remote add images https://images.linuxcontainers.org \
+              --protocol=simplestreams --accept-certificate
+          # Pull Alpine 3.19 amd64 into local cache to avoid timeout during create
+          sudo incus image copy images:alpine/3.19/amd64 local: --alias ci-alpine \
+            --auto-update=false
+          sudo incus image list local: --format csv | head -5
 
-      - name: Create container (Incus native image — no OCI/skopeo needed)
+      - name: Create container (local cached image)
         run: |
-          # Use Ubuntu minimal from the ubuntu: remote — always pre-configured
-          # and reliably available on Incus installations.
+          # Use the locally cached Alpine image — no remote lookup at create time
           sudo incusbox create \
-            --image ubuntu:24.04 \
+            --image local:ci-alpine \
             --name ci-test \
             --root \
             --yes \
