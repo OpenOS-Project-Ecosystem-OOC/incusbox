@@ -13,11 +13,8 @@ config:
   security.syscalls.intercept.setxattr: "true"
   security.syscalls.intercept.bpf: "true"
 
-  # UID/GID mapping — maps host user's UID 1000 to container UID 1000.
-  # Adjust if your host user has a different UID.
-  raw.idmap: |
-    uid 1000 1000
-    gid 1000 1000
+  # raw.idmap is intentionally absent here — incusbox-create sets it
+  # per-container using the actual host UID/GID so any user works correctly.
 
   # AppArmor profile — unconfined allows the nested user namespace operations
   # that rootless Podman/Docker require. On Ubuntu 24.04 the default AppArmor

@@ -544,6 +544,13 @@ lxc.namespace.share.ipc = 1"
     # Apply all raw.lxc directives in a single config set call.
     ${INCUS} config set "${name}" raw.lxc="${raw_lxc}"
 
+    # ── raw.idmap — map host UID/GID into the container ───────────────────────
+    # Without this, bind-mounted home directories appear owned by nobody/nogroup
+    # inside the container for any user whose UID/GID differs from the
+    # container's default mapping. Set per-container so any host user works.
+    ${INCUS} config set "${name}" raw.idmap="uid ${container_user_uid} ${container_user_uid}
+gid ${container_user_gid} ${container_user_gid}"
+
     # Storage pool assignment
     if [ -n "${storage_pool}" ]; then
         ${INCUS} config device override "${name}" root pool="${storage_pool}" 2>/dev/null || true
@@ -572,10 +579,9 @@ main() {
     # Check incus is available
     command -v incus >/dev/null 2>&1 || die "'incus' not found in PATH"
 
-    # Check for skopeo if OCI image
+    # Register OCI remote if needed — Incus handles OCI pulls natively,
+    # no external tool (skopeo etc.) required.
     if is_oci_image; then
-        command -v skopeo >/dev/null 2>&1 || \
-            die "OCI images require 'skopeo'. Install it first."
         ensure_oci_remote
     fi
 

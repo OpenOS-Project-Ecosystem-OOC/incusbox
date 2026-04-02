@@ -15,10 +15,8 @@ config:
   # Allow the container to load kernel modules (overlay, nf_nat, etc.)
   linux.kernel_modules: overlay,nf_nat,ip_tables,ip6_tables,netlink_diag,br_netfilter,xt_conntrack,af_packet
 
-  # Keep original supplementary groups from the host user
-  raw.idmap: |
-    uid 1000 1000
-    gid 1000 1000
+  # raw.idmap is intentionally absent here — incusbox-create sets it
+  # per-container using the actual host UID/GID so any user works correctly.
 
   # Default stop signal
   raw.lxc: |
