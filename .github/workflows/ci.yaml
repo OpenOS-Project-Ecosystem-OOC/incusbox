@@ -182,6 +182,26 @@ jobs:
             echo "OK: parser produced output for all containers"
           '
 
+      - name: incusbox-assemble end-to-end (--dry-run)
+        run: |
+          # Run the full assemble dispatch path against the example file.
+          # --dry-run causes incusbox-assemble to print a [dry-run] line for
+          # each container instead of calling incusbox-create. No Incus daemon
+          # or network access required.
+          out="$(bash incusbox/incusbox-assemble \
+            --dry-run --file incusbox/docs/example-assemble.yaml 2>&1)"
+          echo "${out}"
+          # Count [dry-run] lines — one per container in the example file
+          expected=5
+          actual="$(printf '%s' "${out}" | grep -c '\[dry-run\]')"
+          echo "dry-run lines: ${actual} (expected ${expected})"
+          [ "${actual}" -eq "${expected}" ] \
+            || { echo "FAIL: expected ${expected} [dry-run] lines, got ${actual}"; exit 1; }
+          # Each line must reference incusbox-create
+          printf '%s' "${out}" | grep '\[dry-run\]' | grep -q 'incusbox-create' \
+            || { echo "FAIL: [dry-run] lines do not reference incusbox-create"; exit 1; }
+          echo "OK: incusbox-assemble --dry-run dispatched all ${expected} containers"
+
   # ── integration tests (live Incus daemon) ───────────────────────────────────
   # Runs on ubuntu-24.04 with KVM available. Installs Incus from the upstream
   # snap, initialises it with a minimal config, then exercises the full
