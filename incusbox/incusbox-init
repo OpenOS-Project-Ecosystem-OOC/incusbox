@@ -159,9 +159,12 @@ setup_user() {
         fi
     fi
 
-    # Ensure home directory exists and is owned correctly
-    mkdir -p "${INCUSBOX_CONTAINER_HOME}"
-    chown "${INCUSBOX_HOST_UID}:${INCUSBOX_HOST_GID}" "${INCUSBOX_CONTAINER_HOME}" || true
+    # Ensure home directory exists. Skip chown if it's a bind-mount from the
+    # host — the host already owns it correctly and chown will fail with
+    # "Operation not permitted" on a read-write bind-mount owned by another uid.
+    mkdir -p "${INCUSBOX_CONTAINER_HOME}" 2>/dev/null || true
+    chown "${INCUSBOX_HOST_UID}:${INCUSBOX_HOST_GID}" \
+        "${INCUSBOX_CONTAINER_HOME}" 2>/dev/null || true
 
     # NOPASSWD sudo — create sudoers.d if it doesn't exist (Alpine omits it)
     local sudoers_file="/etc/sudoers.d/incusbox-${INCUSBOX_HOST_USER}"
@@ -254,47 +257,40 @@ setup_init_system() {
 # Write a minimal .bashrc / .profile addition so the container feels like
 # a normal login shell with the right environment.
 setup_shell_integration() {
-    # Only write if the user's home is writable
-    [ -w "${INCUSBOX_CONTAINER_HOME}" ] || return 0
-
     local profile_file="${INCUSBOX_CONTAINER_HOME}/.profile"
+    local rc_file="${INCUSBOX_CONTAINER_HOME}/.bashrc"
 
-    # Write a POSIX .profile that works on all shells (bash, sh, ash)
-    if ! grep -q 'INCUSBOX' "${profile_file}" 2>/dev/null; then
-        cat >> "${profile_file}" <<'PROFBLOCK'
-
+    # Write shell integration as the target user so bind-mounted home dirs
+    # (owned by the host user) are writable. Fall back silently if su fails.
+    local write_cmd
+    write_cmd="$(cat <<'WRITEBLOCK'
+profile_file="${INCUSBOX_CONTAINER_HOME}/.profile"
+rc_file="${INCUSBOX_CONTAINER_HOME}/.bashrc"
+env_block='
 # incusbox environment
 export INCUSBOX=1
 export CONTAINER_ID="${CONTAINER_ID:-incusbox}"
-alias host-exec='incusbox-host-exec'
+alias host-exec=incusbox-host-exec
 export TERMINFO_DIRS="${TERMINFO_DIRS:-/usr/share/terminfo:/run/host/usr/share/terminfo}"
-PROFBLOCK
-    fi
+'
+grep -q 'INCUSBOX' "${profile_file}" 2>/dev/null || \
+    printf '%s\n' "${env_block}" >> "${profile_file}" 2>/dev/null || true
+if command -v bash >/dev/null 2>&1; then
+    grep -q 'INCUSBOX' "${rc_file}" 2>/dev/null || \
+        printf '%s\n' "${env_block}" >> "${rc_file}" 2>/dev/null || true
+    grep -q '.bashrc' "${profile_file}" 2>/dev/null || \
+        printf '[ -f "${HOME}/.bashrc" ] && . "${HOME}/.bashrc"\n' \
+            >> "${profile_file}" 2>/dev/null || true
+fi
+WRITEBLOCK
+)"
 
-    # Also write .bashrc if bash is available
-    if command -v bash >/dev/null 2>&1; then
-        local rc_file="${INCUSBOX_CONTAINER_HOME}/.bashrc"
-        if ! grep -q 'INCUSBOX' "${rc_file}" 2>/dev/null; then
-            cat >> "${rc_file}" <<'RCBLOCK'
-
-# incusbox environment
-export INCUSBOX=1
-export CONTAINER_ID="${CONTAINER_ID:-incusbox}"
-alias host-exec='incusbox-host-exec'
-export TERMINFO_DIRS="${TERMINFO_DIRS:-/usr/share/terminfo:/run/host/usr/share/terminfo}"
-RCBLOCK
-        fi
-        # Ensure .profile sources .bashrc for login shells
-        if ! grep -q '.bashrc' "${profile_file}" 2>/dev/null; then
-            printf '[ -f "${HOME}/.bashrc" ] && . "${HOME}/.bashrc"\n' \
-                >> "${profile_file}"
-        fi
-        chown "${INCUSBOX_HOST_UID}:${INCUSBOX_HOST_GID}" \
-            "${rc_file}" 2>/dev/null || true
-    fi
-
-    chown "${INCUSBOX_HOST_UID}:${INCUSBOX_HOST_GID}" \
-        "${profile_file}" 2>/dev/null || true
+    # Try as the target user first; fall back to root (may fail on bind-mounts)
+    INCUSBOX_CONTAINER_HOME="${INCUSBOX_CONTAINER_HOME}" \
+        su -s /bin/sh -c "${write_cmd}" "${INCUSBOX_HOST_USER}" 2>/dev/null || \
+    INCUSBOX_CONTAINER_HOME="${INCUSBOX_CONTAINER_HOME}" \
+        sh -c "${write_cmd}" 2>/dev/null || \
+        log "Warning: could not write shell integration to ${INCUSBOX_CONTAINER_HOME}"
 }
 
 # ── XDG dirs ──────────────────────────────────────────────────────────────────
