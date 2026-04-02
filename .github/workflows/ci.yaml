@@ -117,6 +117,9 @@ jobs:
               exit 1
             fi
           done
+          # Verify --update re-runs cleanly over an existing installation
+          bash incusbox/install --user --update --verbose
+          echo "OK: --update completed without error"
 
   profile-yaml:
     name: Validate profile YAML
@@ -283,9 +286,6 @@ jobs:
           # Add home bind-mount
           sudo incus config device add ci-test home disk \
             source="${HOME}" path="${HOME}"
-          # Add /run/host for host-exec test
-          sudo incus config device add ci-test run-host disk \
-            source=/ path=/run/host readonly=true
           echo "Container created"
 
       - name: Verify container is running
@@ -351,16 +351,50 @@ jobs:
           echo "Home ${home}: ${result}"
           [ "${result}" = "exists" ] || { echo "FAIL: home not mounted"; exit 1; }
 
-      - name: Verify /run/host is mounted (host-exec path)
-        run: |
-          result="$(sudo incus exec ci-test -- test -d /run/host 2>/dev/null && echo "exists" || echo "missing")"
-          echo "/run/host: ${result}"
-          [ "${result}" = "exists" ] || { echo "FAIL: /run/host not mounted"; exit 1; }
-
       - name: incusbox list
         run: |
           sudo incusbox list --root
           echo "OK: list completed"
+
+      - name: incusbox-host-exec
+        run: |
+          # Push the script into the container so we don't rely on /run/host
+          # (GHA runners mount /usr/local separately; a source=/ bind-mount is
+          # non-recursive and won't include it).
+          sudo incus file push incusbox/incusbox-host-exec \
+            ci-test/usr/local/bin/incusbox-host-exec --mode 0755
+          # chroot /run/host is the expected fallback path inside an Incus
+          # container (no CAP_SYS_PTRACE → nsenter is skipped).
+          # /run/host must be present for the script to work.
+          sudo incus config device add ci-test run-host disk \
+            source=/ path=/run/host readonly=true
+          # uname -s via chroot /run/host should return "Linux"
+          result="$(sudo incus exec ci-test -- \
+            /usr/local/bin/incusbox-host-exec uname -s 2>&1)"
+          echo "host-exec output: ${result}"
+          printf '%s' "${result}" | grep -q "Linux" \
+            || { echo "FAIL: expected Linux, got: ${result}"; exit 1; }
+          echo "OK: incusbox-host-exec works"
+
+      - name: incusbox-export (binary)
+        run: |
+          # Push the script into the container (same reason as host-exec above:
+          # /run/host/usr/local is not visible via the non-recursive source=/ mount).
+          sudo incus file push incusbox/incusbox-export \
+            ci-test/usr/local/bin/incusbox-export --mode 0755
+          # Export to /tmp/test-bin inside the container — avoids uid-mapping
+          # issues with the bind-mounted home directory on unprivileged containers.
+          sudo incus exec ci-test -- mkdir -p /tmp/test-bin
+          sudo incus exec --env "HOME=/tmp/test-home" ci-test -- \
+            /usr/local/bin/incusbox-export --bin /bin/sh
+          # Pull the wrapper out and verify it on the host
+          sudo incus file pull ci-test/tmp/test-home/.local/bin/sh /tmp/sh-wrapper
+          echo "Wrapper contents:"
+          cat /tmp/sh-wrapper
+          grep -q "incusbox enter" /tmp/sh-wrapper \
+            || { echo "FAIL: wrapper does not call incusbox enter"; exit 1; }
+          echo "OK: incusbox-export created wrapper"
+          sudo rm -f /tmp/sh-wrapper
 
       - name: incusbox stop
         run: |
