@@ -494,17 +494,19 @@ jobs:
           printf 'uid %s %s\ngid %s %s\n' \
             "${uid}" "${uid}" "${gid}" "${gid}" > /tmp/idmap.txt
 
+          # Set raw.lxc and raw.idmap via temp files to avoid embedded newlines
+          # in --config values, which break YAML workflow parsing at column 0.
+          printf 'lxc.apparmor.profile = unconfined\nlxc.cap.drop =\nlxc.cgroup.devices.allow = a\n' \
+            > /tmp/raw-lxc.txt
+
           sudo incus launch local:ci-debian ci-debian \
             --profile incusbox-base \
             --storage default \
             --config user.manager=incusbox \
-            --config "raw.lxc=lxc.apparmor.profile = unconfined
-lxc.cap.drop =
-lxc.cgroup.devices.allow = a" \
             --config "cloud-init.user-data=$(cat /tmp/cloud-init.yaml)"
 
-          # Set raw.idmap after launch via file to avoid newline quoting issues
-          sudo incus config set ci-debian raw.idmap="$(cat /tmp/idmap.txt)"
+          sudo incus config set ci-debian "raw.lxc=$(cat /tmp/raw-lxc.txt)"
+          sudo incus config set ci-debian "raw.idmap=$(cat /tmp/idmap.txt)"
 
           sudo incus config device add ci-debian eth0 nic \
             nictype=bridged parent=incusbr0 name=eth0
