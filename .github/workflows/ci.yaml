@@ -327,10 +327,11 @@ jobs:
 
       - name: Verify user exists inside container
         run: |
-          uid="$(id -ru)"
-          result="$(sudo incus exec ci-test -- id "${uid}" 2>/dev/null || true)"
+          user="$(id -run)"
+          # Use username not numeric UID — BusyBox id(1) doesn't accept numeric UIDs
+          result="$(sudo incus exec ci-test -- id "${user}" 2>/dev/null || true)"
           echo "id output: ${result}"
-          [ -n "${result}" ] || { echo "FAIL: user uid=${uid} not found in container"; exit 1; }
+          [ -n "${result}" ] || { echo "FAIL: user ${user} not found in container"; exit 1; }
           echo "OK: user exists"
 
       - name: Verify home directory is bind-mounted
