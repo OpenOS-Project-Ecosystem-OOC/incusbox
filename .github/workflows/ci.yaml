@@ -378,12 +378,13 @@ jobs:
           echo "=== cloud-init status ==="
           sudo incus exec ci-test -- cloud-init status --long 2>/dev/null || true
 
-  # ── cloud-init path: Alpine cloud variant ───────────────────────────────────
-  # Tests the cloud-init injection path used by incusbox-create for images that
-  # ship cloud-init. Uses images:alpine/3.20/cloud which includes cloud-init
-  # and is on the same images: remote as the base Alpine job.
+  # ── Debian/Ubuntu distro path ────────────────────────────────────────────────
+  # Tests the apt/useradd/groupadd branch of incusbox-init (Debian codepath).
+  # Uses the same exec-injection pattern as the base Alpine job — no cloud-init
+  # involved. This validates distro-agnosticism: Alpine uses apk+adduser,
+  # Debian uses apt+useradd; both must produce a working user environment.
   integration-cloudinit:
-    name: Integration (cloud-init / Alpine cloud)
+    name: Integration (Debian / exec-injection)
     runs-on: ubuntu-24.04
     if: github.event_name == 'push' || github.event.pull_request.draft == false
     steps:
@@ -437,122 +438,77 @@ jobs:
             echo "Created profile: ${name}"
           done
 
-      - name: Pull Alpine cloud image (includes cloud-init)
+      - name: Pull Debian image
         run: |
-          # alpine/3.20/cloud ships cloud-init; available on the images: remote
-          pulled=0
-          for alias in "alpine/3.20/cloud" "alpine/3.19/cloud" "alpine/edge/cloud"; do
+          for alias in "debian/12" "debian/11"; do
             if sudo incus image copy "images:${alias}" local: \
-                --alias ci-alpine-cloud --auto-update=false 2>/dev/null; then
+                --alias ci-debian --auto-update=false 2>/dev/null; then
               echo "Pulled: images:${alias}"
-              pulled=1
               break
             fi
           done
-          [ "${pulled}" -eq 1 ] || { echo "Could not pull Alpine cloud image"; exit 1; }
           sudo incus image list local: --format csv
 
-      - name: Generate cloud-init user-data and launch container
+      - name: Launch Debian container and run incusbox-init
         run: |
           uid="$(id -ru)"
           gid="$(id -rg)"
           user="$(id -run)"
-          home="${HOME}"
 
-          # Encode incusbox-init as base64 for cloud-init write_files
-          init_b64="$(base64 -w0 incusbox/incusbox-init)"
-
-          # Build cloud-init YAML using printf — avoids heredoc indentation
-          # issues where leading spaces from YAML block indentation corrupt
-          # the cloud-config content parsed by Incus.
-          {
-            printf '#cloud-config\n'
-            printf 'write_files:\n'
-            printf '%s\n' '- path: /etc/incusbox-container'
-            printf '  permissions: '"'"'0644'"'"'\n'
-            printf '  content: |\n'
-            printf '    INCUSBOX_CONTAINER_NAME=ci-alpine-cloud\n'
-            printf '    INCUSBOX_HOST_USER=%s\n'      "${user}"
-            printf '    INCUSBOX_HOST_UID=%s\n'       "${uid}"
-            printf '    INCUSBOX_HOST_GID=%s\n'       "${gid}"
-            printf '    INCUSBOX_HOST_HOME=%s\n'      "${home}"
-            printf '    INCUSBOX_CONTAINER_HOME=%s\n' "${home}"
-            printf '    INCUSBOX_ADDITIONAL_PACKAGES=\n'
-            printf '    INCUSBOX_PRE_INIT_HOOK=\n'
-            printf '    INCUSBOX_INIT_HOOK=\n'
-            printf '    INCUSBOX_INIT=0\n'
-            printf '    INCUSBOX_NVIDIA=0\n'
-            printf '%s\n' '- path: /usr/local/bin/incusbox-init'
-            printf '  permissions: '"'"'0755'"'"'\n'
-            printf '  encoding: b64\n'
-            printf '  content: %s\n' "${init_b64}"
-            printf 'runcmd:\n'
-            printf '%s\n' '- [sh, /usr/local/bin/incusbox-init]'
-          } > /tmp/cloud-init.yaml
-
-          # Write raw.idmap to a temp file — avoids shell quoting issues with
-          # embedded newlines when passing multiline values to incus config set.
-          printf 'uid %s %s\ngid %s %s\n' \
-            "${uid}" "${uid}" "${gid}" "${gid}" > /tmp/idmap.txt
-
-          # Create (not launch) so NIC and raw.idmap are set before first boot —
-          # cloud-init needs the NIC available at startup.
-          # Use default profile only — incusbox-base adds raw.lxc directives that
-          # require AppArmor unconfined, which causes forkstart failures in CI.
-          # This job tests the cloud-init path, not the full incusbox profile stack.
-          sudo incus init local:ci-alpine-cloud ci-alpine-cloud \
-            --profile default \
+          sudo incus launch local:ci-debian ci-debian \
             --storage default \
             --config user.manager=incusbox \
-            --config "cloud-init.user-data=$(cat /tmp/cloud-init.yaml)"
-
-          sudo incus config set ci-alpine-cloud "raw.idmap=$(cat /tmp/idmap.txt)"
-
-          sudo incus config device add ci-alpine-cloud eth0 nic \
+            --config "raw.lxc=lxc.apparmor.profile = unconfined
+          lxc.cap.drop =
+          lxc.cgroup.devices.allow = a"
+          sudo incus config device add ci-debian eth0 nic \
             nictype=bridged parent=incusbr0 name=eth0
-          sudo incus config device add ci-alpine-cloud home disk \
-            source="${home}" path="${home}"
+          sudo incus config device add ci-debian home disk \
+            source="${HOME}" path="${HOME}"
 
-          sudo incus start ci-alpine-cloud
-          echo "Container started"
+          # Wait for container to be ready
+          sleep 5
 
-      - name: Wait for cloud-init and incusbox-init to complete
-        run: |
-          echo "Waiting for /run/incusbox-ready..."
-          for i in $(seq 1 60); do
-            if sudo incus exec ci-alpine-cloud -- test -f /run/incusbox-ready 2>/dev/null; then
-              echo "Ready after ${i}s"
-              break
-            fi
-            [ "${i}" -eq 60 ] && { echo "FAIL: timed out waiting for incusbox-ready"; exit 1; }
-            sleep 5
-          done
+          # Inject and run incusbox-init (exec-injection path, same as Alpine job)
+          sudo incus exec ci-debian -- sh -c 'cat > /tmp/incusbox-init' \
+            < incusbox/incusbox-init
+          sudo incus exec ci-debian -- chmod +x /tmp/incusbox-init
+          sudo incus exec ci-debian -- sh /tmp/incusbox-init \
+            --user "${user}" \
+            --uid  "${uid}" \
+            --gid  "${gid}" \
+            --group "$(id -rn -g)" \
+            --home  "${HOME}" \
+            --shell /bin/sh \
+            --container-name ci-debian \
+            --distro debian
 
       - name: Verify user exists inside container
         run: |
           user="$(id -run)"
-          result="$(sudo incus exec ci-alpine-cloud -- id "${user}" 2>/dev/null || true)"
+          result="$(sudo incus exec ci-debian -- id "${user}" 2>/dev/null || true)"
           echo "id output: ${result}"
           [ -n "${result}" ] || { echo "FAIL: user ${user} not found"; exit 1; }
           echo "OK: user exists"
 
       - name: Verify home directory is bind-mounted
         run: |
-          result="$(sudo incus exec ci-alpine-cloud -- test -d "${HOME}" 2>/dev/null && echo "exists" || echo "missing")"
+          result="$(sudo incus exec ci-debian -- test -d "${HOME}" 2>/dev/null \
+            && echo "exists" || echo "missing")"
           echo "Home ${HOME}: ${result}"
           [ "${result}" = "exists" ] || { echo "FAIL: home not mounted"; exit 1; }
 
       - name: Verify sudo works inside container
         run: |
           user="$(id -run)"
-          sudo incus exec ci-alpine-cloud -- su - "${user}" -s /bin/sh -c "sudo id" \
+          sudo incus exec ci-debian -- su - "${user}" -s /bin/sh -c "sudo id" \
             && echo "OK: sudo works" || { echo "FAIL: sudo failed"; exit 1; }
 
       - name: incusbox stop and rm
         run: |
-          sudo incusbox stop --root ci-alpine-cloud
-          sudo incusbox rm --root --yes ci-alpine-cloud
-          sudo incus info ci-alpine-cloud >/dev/null 2>&1 && \
+          sudo incusbox stop --root ci-debian
+          sudo incusbox rm --root --yes ci-debian
+          sudo incus info ci-debian >/dev/null 2>&1 && \
             { echo "FAIL: container still exists"; exit 1; } || echo "OK: removed"
 
       - name: Collect logs on failure
@@ -560,9 +516,5 @@ jobs:
         run: |
           echo "=== incus list ==="
           sudo incus list || true
-          echo "=== cloud-init status ==="
-          sudo incus exec ci-alpine-cloud -- cloud-init status --long 2>/dev/null || true
           echo "=== incusbox-init log ==="
-          sudo incus exec ci-alpine-cloud -- cat /var/log/incusbox-init.log 2>/dev/null || true
-          echo "=== /run/incusbox-ready ==="
-          sudo incus exec ci-alpine-cloud -- ls -la /run/incusbox-ready 2>/dev/null || echo "not present"
+          sudo incus exec ci-debian -- cat /var/log/incusbox-init.log 2>/dev/null || true
