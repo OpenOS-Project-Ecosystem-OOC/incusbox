@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-only
 # incusbox-init: in-container setup script, injected via cloud-init.
 # Replaces distrobox-init. Runs once at first boot inside the container.
@@ -92,19 +92,23 @@ pkg_update() {
 # ── core dependency packages ──────────────────────────────────────────────────
 # Minimal set needed for incusbox to function inside any container.
 core_packages() {
+    # fuse-overlayfs is included for rootless container storage (avoids the
+    # 10+ minute recursive chown penalty with rootless Podman/Docker).
+    # See: podclaw NOTES.md — "fuse-overlayfs is critical for rootless"
     case "${DISTRO}" in
         ubuntu|debian|linuxmint|pop)
-            printf 'sudo bash curl wget less procps passwd util-linux' ;;
+            printf 'sudo bash curl wget less procps passwd util-linux fuse-overlayfs' ;;
         fedora|rhel|centos|almalinux|rocky)
-            printf 'sudo bash curl wget less procps-ng shadow-utils util-linux' ;;
+            printf 'sudo bash curl wget less procps-ng shadow-utils util-linux fuse-overlayfs' ;;
         arch|manjaro|endeavouros)
-            printf 'sudo bash curl wget less procps-ng shadow util-linux' ;;
+            printf 'sudo bash curl wget less procps-ng shadow util-linux fuse-overlayfs' ;;
         alpine)
-            printf 'sudo bash curl wget less procps shadow util-linux' ;;
+            # fuse-overlayfs not in Alpine repos; use fuse3 + overlay via kernel
+            printf 'sudo bash curl wget less procps shadow util-linux fuse3' ;;
         opensuse*|sles)
-            printf 'sudo bash curl wget less procps shadow util-linux' ;;
+            printf 'sudo bash curl wget less procps shadow util-linux fuse-overlayfs' ;;
         void)
-            printf 'sudo bash curl wget less procps shadow util-linux' ;;
+            printf 'sudo bash curl wget less procps shadow util-linux fuse-overlayfs' ;;
         *)
             printf 'sudo bash' ;;
     esac
@@ -114,35 +118,77 @@ core_packages() {
 setup_user() {
     log "Setting up user ${INCUSBOX_HOST_USER} (uid=${INCUSBOX_HOST_UID} gid=${INCUSBOX_HOST_GID})"
 
-    # Create group if it doesn't exist
-    if ! getent group "${INCUSBOX_HOST_GID}" >/dev/null 2>&1; then
-        groupadd --gid "${INCUSBOX_HOST_GID}" "${INCUSBOX_HOST_USER}" 2>/dev/null || true
+    # Detect whether we have shadow-utils (useradd/groupadd) or BusyBox
+    # (adduser/addgroup). Alpine uses BusyBox; most other distros use shadow.
+    if command -v useradd >/dev/null 2>&1; then
+        # shadow-utils path (Debian, Fedora, Arch, openSUSE, Void, Gentoo)
+        if ! getent group "${INCUSBOX_HOST_GID}" >/dev/null 2>&1; then
+            groupadd --gid "${INCUSBOX_HOST_GID}" "${INCUSBOX_HOST_USER}" 2>/dev/null || true
+        fi
+        if ! getent passwd "${INCUSBOX_HOST_USER}" >/dev/null 2>&1; then
+            useradd \
+                --uid "${INCUSBOX_HOST_UID}" \
+                --gid "${INCUSBOX_HOST_GID}" \
+                --home-dir "${INCUSBOX_CONTAINER_HOME}" \
+                --no-create-home \
+                --shell /bin/bash \
+                "${INCUSBOX_HOST_USER}" 2>/dev/null || true
+        fi
+    else
+        # BusyBox path (Alpine and similar minimal distros)
+        # addgroup: -g GID NAME  (no --gid long form in BusyBox)
+        # adduser:  -u UID -G GROUP -h HOME -s SHELL -D (no-password) NAME
+        # The group must exist before adduser -G references it.
+        #
+        # GID conflicts: the host GID (e.g. 127 for "docker") may already be
+        # taken inside the container by a different group. In that case we
+        # skip creating a new group and reuse whatever group owns that GID.
+        local grp_name
+        if ! getent group "${INCUSBOX_HOST_GID}" >/dev/null 2>&1; then
+            if addgroup -g "${INCUSBOX_HOST_GID}" "${INCUSBOX_HOST_USER}" 2>/dev/null; then
+                grp_name="${INCUSBOX_HOST_USER}"
+            else
+                log "Warning: addgroup failed for gid=${INCUSBOX_HOST_GID}, using users"
+                grp_name="users"
+            fi
+        else
+            grp_name="$(getent group "${INCUSBOX_HOST_GID}" | cut -d: -f1)"
+        fi
+        if ! getent passwd "${INCUSBOX_HOST_USER}" >/dev/null 2>&1; then
+            adduser \
+                -u "${INCUSBOX_HOST_UID}" \
+                -G "${grp_name}" \
+                -h "${INCUSBOX_CONTAINER_HOME}" \
+                -s /bin/sh \
+                -D \
+                "${INCUSBOX_HOST_USER}" 2>/dev/null \
+                || log "Warning: adduser failed for ${INCUSBOX_HOST_USER}"
+        fi
     fi
 
-    # Create user if it doesn't exist
-    if ! getent passwd "${INCUSBOX_HOST_USER}" >/dev/null 2>&1; then
-        useradd \
-            --uid "${INCUSBOX_HOST_UID}" \
-            --gid "${INCUSBOX_HOST_GID}" \
-            --home-dir "${INCUSBOX_CONTAINER_HOME}" \
-            --no-create-home \
-            --shell /bin/bash \
-            "${INCUSBOX_HOST_USER}" 2>/dev/null || true
-    fi
+    # Ensure home directory exists. Skip chown if it's a bind-mount from the
+    # host — the host already owns it correctly and chown will fail with
+    # "Operation not permitted" on a read-write bind-mount owned by another uid.
+    mkdir -p "${INCUSBOX_CONTAINER_HOME}" 2>/dev/null || true
+    chown "${INCUSBOX_HOST_UID}:${INCUSBOX_HOST_GID}" \
+        "${INCUSBOX_CONTAINER_HOME}" 2>/dev/null || true
 
-    # Ensure home directory exists and is owned correctly
-    mkdir -p "${INCUSBOX_CONTAINER_HOME}"
-    chown "${INCUSBOX_HOST_UID}:${INCUSBOX_HOST_GID}" "${INCUSBOX_CONTAINER_HOME}" || true
-
-    # NOPASSWD sudo
+    # NOPASSWD sudo — create sudoers.d if it doesn't exist (Alpine omits it)
     local sudoers_file="/etc/sudoers.d/incusbox-${INCUSBOX_HOST_USER}"
-    printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${INCUSBOX_HOST_USER}" > "${sudoers_file}"
-    chmod 0440 "${sudoers_file}"
+    mkdir -p /etc/sudoers.d
+    printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${INCUSBOX_HOST_USER}" > "${sudoers_file}" \
+        2>/dev/null || log "Warning: could not write sudoers file (continuing)"
+    chmod 0440 "${sudoers_file}" 2>/dev/null || true
 
     # Also add to wheel/sudo groups if they exist
     for grp in sudo wheel adm; do
-        getent group "${grp}" >/dev/null 2>&1 && \
+        getent group "${grp}" >/dev/null 2>&1 || continue
+        if command -v usermod >/dev/null 2>&1; then
             usermod -aG "${grp}" "${INCUSBOX_HOST_USER}" 2>/dev/null || true
+        else
+            # BusyBox: adduser USER GROUP
+            adduser "${INCUSBOX_HOST_USER}" "${grp}" 2>/dev/null || true
+        fi
     done
 }
 
@@ -218,47 +264,55 @@ setup_init_system() {
 # Write a minimal .bashrc / .profile addition so the container feels like
 # a normal login shell with the right environment.
 setup_shell_integration() {
-    local rc_file="${INCUSBOX_CONTAINER_HOME}/.bashrc"
     local profile_file="${INCUSBOX_CONTAINER_HOME}/.profile"
+    local rc_file="${INCUSBOX_CONTAINER_HOME}/.bashrc"
 
-    # Only write if the user's home is writable
-    [ -w "${INCUSBOX_CONTAINER_HOME}" ] || return 0
-
-    # Append incusbox env block if not already present
-    if ! grep -q 'INCUSBOX' "${rc_file}" 2>/dev/null; then
-        cat >> "${rc_file}" <<'RCBLOCK'
-
+    # Write shell integration as the target user so bind-mounted home dirs
+    # (owned by the host user) are writable. Fall back silently if su fails.
+    local write_cmd
+    write_cmd="$(cat <<'WRITEBLOCK'
+profile_file="${INCUSBOX_CONTAINER_HOME}/.profile"
+rc_file="${INCUSBOX_CONTAINER_HOME}/.bashrc"
+env_block='
 # incusbox environment
 export INCUSBOX=1
 export CONTAINER_ID="${CONTAINER_ID:-incusbox}"
-# Make host executables available via distrobox-host-exec
-alias host-exec='incusbox-host-exec'
-# Ensure terminfo from host is available
+alias host-exec=incusbox-host-exec
 export TERMINFO_DIRS="${TERMINFO_DIRS:-/usr/share/terminfo:/run/host/usr/share/terminfo}"
-RCBLOCK
-    fi
+'
+grep -q 'INCUSBOX' "${profile_file}" 2>/dev/null || \
+    printf '%s\n' "${env_block}" >> "${profile_file}" 2>/dev/null || true
+if command -v bash >/dev/null 2>&1; then
+    grep -q 'INCUSBOX' "${rc_file}" 2>/dev/null || \
+        printf '%s\n' "${env_block}" >> "${rc_file}" 2>/dev/null || true
+    grep -q '.bashrc' "${profile_file}" 2>/dev/null || \
+        printf '[ -f "${HOME}/.bashrc" ] && . "${HOME}/.bashrc"\n' \
+            >> "${profile_file}" 2>/dev/null || true
+fi
+WRITEBLOCK
+)"
 
-    # Ensure .profile sources .bashrc for login shells
-    if ! grep -q '.bashrc' "${profile_file}" 2>/dev/null; then
-        cat >> "${profile_file}" <<'PROFBLOCK'
-[ -f "${HOME}/.bashrc" ] && . "${HOME}/.bashrc"
-PROFBLOCK
-    fi
-
-    chown "${INCUSBOX_HOST_UID}:${INCUSBOX_HOST_GID}" \
-        "${rc_file}" "${profile_file}" 2>/dev/null || true
+    # Try as the target user first; fall back to root (may fail on bind-mounts)
+    INCUSBOX_CONTAINER_HOME="${INCUSBOX_CONTAINER_HOME}" \
+        su -s /bin/sh -c "${write_cmd}" "${INCUSBOX_HOST_USER}" 2>/dev/null || \
+    INCUSBOX_CONTAINER_HOME="${INCUSBOX_CONTAINER_HOME}" \
+        sh -c "${write_cmd}" 2>/dev/null || \
+        log "Warning: could not write shell integration to ${INCUSBOX_CONTAINER_HOME}"
 }
 
 # ── XDG dirs ──────────────────────────────────────────────────────────────────
 setup_xdg_dirs() {
-    local xdg_data="${INCUSBOX_CONTAINER_HOME}/.local/share"
-    local xdg_config="${INCUSBOX_CONTAINER_HOME}/.config"
-    local xdg_cache="${INCUSBOX_CONTAINER_HOME}/.cache"
+    # Run as the target user so bind-mounted home dirs (owned by host uid)
+    # are writable. Fall back silently if su fails.
+    local xdg_cmd
+    xdg_cmd="mkdir -p \
+        '${INCUSBOX_CONTAINER_HOME}/.local/share' \
+        '${INCUSBOX_CONTAINER_HOME}/.config' \
+        '${INCUSBOX_CONTAINER_HOME}/.cache'"
 
-    for d in "${xdg_data}" "${xdg_config}" "${xdg_cache}"; do
-        mkdir -p "${d}"
-        chown "${INCUSBOX_HOST_UID}:${INCUSBOX_HOST_GID}" "${d}" 2>/dev/null || true
-    done
+    su -s /bin/sh -c "${xdg_cmd}" "${INCUSBOX_HOST_USER}" 2>/dev/null || \
+        sh -c "${xdg_cmd}" 2>/dev/null || \
+        log "Warning: could not create XDG dirs in ${INCUSBOX_CONTAINER_HOME}"
 }
 
 # ── main ──────────────────────────────────────────────────────────────────────
