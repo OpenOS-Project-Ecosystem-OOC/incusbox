@@ -473,13 +473,14 @@ jobs:
           sudo incus exec ci-debian -- sh -c 'cat > /tmp/incusbox-init' \
             < incusbox/incusbox-init
           sudo incus exec ci-debian -- chmod +x /tmp/incusbox-init
+          group="$(id -gn)"
           sudo incus exec ci-debian -- sh /tmp/incusbox-init \
-            --user "${user}" \
-            --uid  "${uid}" \
-            --gid  "${gid}" \
-            --group "$(id -rn -g)" \
-            --home  "${HOME}" \
-            --shell /bin/sh \
+            --user   "${user}" \
+            --uid    "${uid}" \
+            --gid    "${gid}" \
+            --group  "${group}" \
+            --home   "${HOME}" \
+            --shell  /bin/sh \
             --container-name ci-debian \
             --distro debian
 
