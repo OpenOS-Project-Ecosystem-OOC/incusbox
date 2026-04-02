@@ -261,23 +261,34 @@ jobs:
           echo "Status: ${status}"
           [ "${status}" = "running" ] || { echo "FAIL: expected running"; exit 1; }
 
-      - name: Wait for incusbox-init readiness
+      - name: Run incusbox-init directly (reliable for CI)
         run: |
-          echo "Waiting for /run/incusbox-ready..."
-          elapsed=0
-          while [ "${elapsed}" -lt 120 ]; do
-            if sudo incus exec ci-test -- test -f /run/incusbox-ready 2>/dev/null; then
-              echo "OK: /run/incusbox-ready found after ${elapsed}s"
-              break
-            fi
-            sleep 5
-            elapsed=$((elapsed + 5))
-          done
-          if [ "${elapsed}" -ge 120 ]; then
-            echo "WARN: timed out — checking cloud-init / exec injection logs"
-            sudo incus exec ci-test -- cat /var/log/incusbox-init.log 2>/dev/null || true
-            sudo incus info --show-log ci-test || true
-          fi
+          # For CI we run incusbox-init synchronously via incus exec rather than
+          # relying on the background nohup injection. This avoids BusyBox sh
+          # nohup timing issues and gives us direct output for diagnosis.
+          uid="$(id -ru)"
+          gid="$(id -rg)"
+          user="$(id -run)"
+          home="${HOME}"
+          # Write the config file
+          sudo incus exec ci-test -- sh -c "cat > /etc/incusbox-container" <<CONF
+          INCUSBOX_CONTAINER_NAME=ci-test
+          INCUSBOX_HOST_USER=${user}
+          INCUSBOX_HOST_UID=${uid}
+          INCUSBOX_HOST_GID=${gid}
+          INCUSBOX_HOST_HOME=${home}
+          INCUSBOX_CONTAINER_HOME=${home}
+          INCUSBOX_ADDITIONAL_PACKAGES=
+          INCUSBOX_PRE_INIT_HOOK=
+          INCUSBOX_INIT_HOOK=
+          INCUSBOX_INIT=0
+          INCUSBOX_NVIDIA=0
+          CONF
+          # Push and run incusbox-init synchronously
+          sudo incus file push incusbox/incusbox-init \
+            ci-test/usr/local/bin/incusbox-init --mode 0755
+          sudo incus exec ci-test -- /usr/local/bin/incusbox-init
+          echo "incusbox-init exit code: $?"
 
       - name: Verify user exists inside container
         run: |
