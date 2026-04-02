@@ -254,6 +254,7 @@ jobs:
           # a NIC already attached for package installs.
           sudo incus launch local:ci-alpine ci-test \
             --profile incusbox-base \
+            --storage default \
             --config user.manager=incusbox \
             --config "user.incusbox.host_user=$(id -run)" \
             --config "user.incusbox.host_uid=$(id -ru)" \
