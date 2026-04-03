@@ -102,6 +102,7 @@ incusbox-publish
 incusbox-import
 incusbox-fleet
 incusbox-monitor
+incusbox-net
 incusbox-cloud-sync
 incusbox-template
 incusbox-assemble
