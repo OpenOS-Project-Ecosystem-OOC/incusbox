@@ -52,6 +52,7 @@ Commands:
   monitor         Show container resource usage and stats
   cloud-sync      Sync backups to cloud storage via rclone
 
+  template        List and inspect container creation templates
   assemble        Create/update containers from a declarative YAML file
   setup-rootless  Guided setup for rootless incusbox via incus-user
   doctor          Check prerequisites and runtime environment
@@ -130,6 +131,7 @@ case "${cmd}" in
     cloud-sync)     run_subcommand cloud-sync     "$@" ;;
 
     # Declarative config
+    template)       run_subcommand template       "$@" ;;
     assemble)       run_subcommand assemble       "$@" ;;
     setup-rootless) run_subcommand setup-rootless "$@" ;;
 
