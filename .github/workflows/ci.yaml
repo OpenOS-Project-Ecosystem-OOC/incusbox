@@ -148,9 +148,14 @@ jobs:
 
       - name: Install yq
         run: |
-          sudo wget -qO /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
+          for attempt in 1 2 3; do
+            sudo wget -qO /usr/local/bin/yq \
+              https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 \
+              && sudo chmod +x /usr/local/bin/yq && break
+            echo "wget attempt ${attempt} failed, retrying in 10s..."
+            sleep 10
+          done
+          yq --version
 
       - name: Validate all profile YAML files
         run: |
