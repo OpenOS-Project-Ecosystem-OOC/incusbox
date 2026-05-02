@@ -17,7 +17,7 @@ update=0
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 log()  { printf '%s\n' "$*"; }
-info() { [ "${verbose}" -eq 1 ] && printf '  %s\n' "$*"; }
+info() { if [ "${verbose}" -eq 1 ]; then printf '  %s\n' "$*"; fi; }
 die()  { printf 'Error: %s\n' "$*" >&2; exit 1; }
 
 show_help() {
